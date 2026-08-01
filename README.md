@@ -187,7 +187,7 @@ Using correlation analysis, robust regression, and bootstrap resampling, I inves
 2. Transcribe the 9 subjects' demographics from `subjectInformation.pdf` into `SUBJECT_INFO` in `pamap2_analysis_scipy.py`
 3. Run `python3 pamap2_analysis_scipy.py` to produce `pamap2_quality_clean.csv`
 4. Create a PostgreSQL database, run `pamap2_schema.sql`, then `python3 load_to_sql.py`
-5. Open `pamap2.Rmd` for statistical analysis
+5. Run `pamap2.Rmd` for the statistical analysis
 6. Connect Tableau to the PostgreSQL database to reproduce the dashboard
 
 ## Author

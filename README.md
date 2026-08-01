@@ -2,13 +2,13 @@
 
 ## Overview
 
-This project investigates whether a wearer's body composition influences the reliability of wearable sensor signals, and whether that relationship depends on where the sensor is placed on the body. Using accelerometer data from the PAMAP2 Physical Activity Monitoring dataset, I applied correlation analysis, mixed-effects regression, and robustness testing to determine whether BMI predicts signal variance at the wrist, chest, and ankle.
+This project investigates whether a wearer's body composition influences the reliability of wearable sensor signals, and whether that relationship depends on where the sensor is placed on the body. Using accelerometer data from the PAMAP2 Physical Activity Monitoring dataset, I applied correlation analysis, robust regression, and bootstrap resampling to determine whether BMI predicts signal variance at the wrist, chest, and ankle.
 
 As wearable and smart garment technology becomes more central to health monitoring and fashion-integrated design, understanding whether sensor performance holds up consistently across different body types is important for equitable and reliable device design.
 
 ## Research Question
 
-Does BMI predict wearable sensor signal quality at a fixed body location, independent of activity type, and does this relationship vary by sensor placement?
+Does BMI predict wearable sensor signal quality at a fixed body location, and does this relationship vary by sensor placement?
 
 ## Dataset
 
@@ -32,10 +32,10 @@ The dataset includes 273 subject × location × activity observations across 9 s
 
 - Python (data parsing, feature engineering)
 - PostgreSQL (relational storage, aggregation)
-- R (`lme4`, `MASS`, `sandwich`, `lmtest`)
+- R (`sandwich`, `lmtest`, `MASS`)
 - Correlation Testing (`cor.test`)
 - One-Way ANOVA (`aov`)
-- Linear Mixed-Effects Models
+- OLS Regression with Robust Standard Errors
 - Robust Regression (Iteratively Reweighted Least Squares)
 - Bootstrap Resampling
 - Tableau
@@ -66,64 +66,83 @@ GROUP BY location, activity, bmi_quartile;
 
 ### Correlation and ANOVA
 
-BMI's relationship with signal variance was tested separately at each location, and a one-way ANOVA tested whether variance differed significantly by location overall.
+BMI's relationship with signal variance was tested separately at each location, using subject-level averages (n=9 per location) rather than the raw 273 rows — since BMI is a subject-level trait, it doesn't vary across a subject's repeated readings, so the honest sample size for this test is 9, not 273. A one-way ANOVA tested whether variance differed significantly by location overall.
 
 ```r
 cor.test(sub$bmi, sub$variance)
 aov(variance ~ location, data = pamap2)
 ```
 
-### Mixed-Effects Modeling
+### OLS Regression with Robust Standard Errors
 
-Because each subject contributed repeated readings across activities, a naive pooled regression would understate BMI's true uncertainty. A mixed-effects model treating subject as a random effect was used instead, with a BMI × location interaction term to test whether BMI's effect varied by placement.
+A pooled regression across all 273 readings (`variance ~ bmi + location + activity`) was fit with heteroskedasticity-robust standard errors, following the same approach used in prior coursework analyzing binary and continuous outcomes.
 
 ```r
-lmer(variance ~ bmi * location + activity + (1 | subject_id), data = pamap2)
+ols.fit <- lm(variance ~ bmi + location + activity, data = pamap2)
+coeftest(ols.fit, vcov = vcovHC(ols.fit, type = "HC1"))
 ```
 
 ### Robustness Testing
 
-A leave-one-subject-out sensitivity analysis and a robust regression (downweighting outlier influence) were used to confirm the stability of the results.
+Two checks were used to assess the stability of the results:
+
+- **Bootstrap resampling**: because the sample size is small (n=9 subjects), the usual formula-based confidence interval for a correlation assumes a larger sample than is available here. Instead, the 9 subjects were resampled with replacement 2,000 times to construct an empirical 95% confidence interval for each location's correlation.
+- **Robust regression** (`MASS::rlm`): downweights the influence of outlier observations automatically, rather than removing them by hand, as a check on whether the pooled OLS result was sensitive to extreme values.
+- **Leave-one-subject-out**: the location ANOVA was refit nine times, each time excluding one subject, to confirm the result wasn't driven by any single individual.
 
 ## Key Findings
 
-### Finding 1: Sensor Location Significantly Affects Signal Variance
+### Finding 1: Sensor Location Effect on Signal Variance
 
-A one-way ANOVA found that signal variance differed significantly across the three sensor locations (F(2,267) = 17.07, p = 1.06 × 10⁻⁷). This confirms that placement itself is a meaningful factor in signal capture.
+A one-way ANOVA found that signal variance differed significantly across the three sensor locations (F(2,267) = 17.07, p = 1.06 × 10⁻⁷), indicating that where a sensor sits on the body meaningfully affects the signal it captures.
 
-<img width="250" height="676" alt="figure1_location_variance" src="https://github.com/user-attachments/assets/ece4a190-2c90-482a-954b-de2498e554d2" />
+<img width="250" height="676" alt="figure1_location_variance" src="https://github.com/user-attachments/assets/2a54b181-4b7d-4f85-9808-a29a43b50f8e" />
 
-*Figure 1. Average signal variance by sensor location, showing significant differences across placements (ANOVA p = 1.06 × 10⁻⁷).*
+*Figure 1. Average signal variance by sensor location.*
 
-### Finding 2: BMI's Relationship with Signal Quality Depends on Location
+### Finding 2: BMI's Relationship with Signal Quality by Location
 
-| Location | r | p-value | 95% Bootstrap CI |
-|---|---|---|---|
-| Wrist | -0.663 | 0.052 | [-0.936, -0.052] |
-| Chest | -0.338 | 0.374 | [-0.835, 0.218] |
-| Ankle | -0.182 | 0.639 | [-0.699, 0.664] |
+Correlation between BMI and signal variance was tested separately at each location (subject-level, n=9):
 
-Only the wrist showed a bootstrapped confidence interval that excluded zero, indicating that BMI's negative relationship with signal variance is most defensible at that location.
+| Location | r | p-value |
+|---|---|---|
+| Hand (wrist) | -0.663 | 0.052 |
+| Chest | -0.338 | 0.374 |
+| Ankle | -0.182 | 0.639 |
 
-<img width="1127" height="507" alt="figure2_bmi_by_location" src="https://github.com/user-attachments/assets/c2c4325e-4083-47e1-a60f-4f6a85b2d2a8" />
+The wrist showed the strongest relationship, approaching but not reaching conventional significance (p=0.052) — a higher-BMI subject tended to show lower signal variance at that location. The chest showed a weaker trend in the same direction, and the ankle showed almost no relationship.
 
-*Figure 2. BMI vs. signal variance by location, with linear trend lines. Only the wrist shows a consistent negative trend.*
+<img width="1127" height="507" alt="figure2_bmi_by_location" src="https://github.com/user-attachments/assets/312a6cf5-1d40-4d3b-8fd4-1257dabfb56d" />
 
-### Finding 3: A Naive Pooled Model Understates BMI's Effect
+*Figure 2. BMI vs. signal variance by location, with linear trend lines.*
 
-A regression pooling all 273 readings found no significant BMI effect (p = 0.90). This approach treats repeated readings from the same subject as independent, which is not appropriate given that BMI only varies across 9 subjects, not 273 observations.
+### Finding 3: Bootstrap Confidence Intervals
 
-### Finding 4: The BMI × Location Interaction Confirms Placement-Dependence
+Because of the small sample size, 95% confidence intervals for each location's correlation were constructed via bootstrap resampling (2,000 resamples) rather than a formula-based approach:
 
-A mixed-effects model with a BMI × location interaction term found a significant interaction at the wrist (β = -4.51, t = -2.33), but not at the chest (β = -1.79, t = -0.93). This directly supports the location-dependent pattern observed in Finding 2.
+| Location | r | 95% Bootstrap CI |
+|---|---|---|
+| Hand (wrist) | -0.663 | [-0.936, -0.052] |
+| Chest | -0.338 | [-0.835, 0.218] |
+| Ankle | -0.182 | [-0.699, 0.664] |
 
-<img width="322" height="675" alt="figure3_bootstrap_ci" src="https://github.com/user-attachments/assets/c3a34676-5aae-42fb-9955-fa64c83df649" />
+Only the wrist's interval falls entirely below zero. The chest's and ankle's intervals both include zero, meaning a "no relationship" result cannot be ruled out at those locations given this sample size — while the wrist's negative relationship is comparatively more defensible.
 
-*Figure 3. Bootstrapped 95% confidence intervals for the BMI-variance correlation at each location. Only the wrist's interval excludes zero.*
+<img width="322" height="675" alt="figure3_bootstrap_ci" src="https://github.com/user-attachments/assets/b4732c16-f8be-4564-81de-9c226fb573dd" />
 
-### Finding 5: The Result Is Robust to Outliers and Individual Subjects
+*Figure 3. Bootstrapped 95% confidence intervals for the BMI-variance correlation at each location. A location whose interval excludes zero has a more statistically defensible relationship than one whose interval crosses zero.*
 
-A leave-one-subject-out analysis confirmed the location effect remained significant regardless of which subject was excluded (p ranging from 5.8 × 10⁻⁸ to 2.0 × 10⁻⁶). A robust regression produced a BMI coefficient consistent in sign and magnitude with the correlation-based findings.
+### Finding 4: Robustness
+
+A leave-one-subject-out analysis confirmed the location effect (Finding 1) remained significant regardless of which subject was excluded (p ranging from 5.8 × 10⁻⁸ to 2.0 × 10⁻⁶ across all nine refits), indicating no single subject was driving the result.
+
+A robust regression (which downweights the influence of outlier observations) produced a BMI coefficient of -0.123, consistent in direction with the wrist correlation, though a naive pooled OLS across all 273 readings (0.119, p=0.90) did not detect a significant effect — as expected, since that approach treats each subject's repeated readings as more independent than they truly are, diluting BMI's true subject-level relationship with signal quality.
+
+| Model | BMI Estimate |
+|---|---|
+| Correlation (wrist only) | -0.663 |
+| Naive pooled OLS | 0.119 |
+| Robust regression (rlm) | -0.123 |
 
 ## Why It Matters
 
@@ -134,17 +153,18 @@ Wearable devices are increasingly used for health monitoring, fitness tracking, 
 - Fit-adjustment considerations for garment-integrated sensors
 - Materials and design decisions in wearable technology development
 
-This analysis demonstrates how statistical modeling can be applied to evaluate the consistency and fairness of sensor-based technology across different body types.
+This analysis demonstrates how statistical modeling can be applied to evaluate the consistency of sensor-based technology across different body types.
 
 ## Limitations
 
-- The dataset contains only 9 subjects, limiting statistical power to detect smaller BMI effects.
+- The dataset contains only 9 subjects, limiting statistical power to detect smaller BMI effects; results should be read as exploratory.
 - BMI is an imperfect proxy for body composition, as it does not distinguish muscle from fat mass or account for garment fit.
 - Signal quality metrics (variance, missing rate) are proxies for reliability and have not been validated against a downstream outcome such as activity recognition accuracy.
+- Correlation and robust regression establish association, not causation, and the pooled OLS model treats repeated readings from the same subject as more independent than they truly are.
 
 ## Conclusion
 
-Using correlation analysis, mixed-effects regression, and robustness testing, I investigated whether body composition affects wearable sensor signal reliability. The analysis found that BMI's relationship with signal quality is not uniform across the body: it is most pronounced at the wrist, where the effect held up under bootstrap resampling, interaction modeling, and leave-one-subject-out validation. These findings suggest that a single sensor placement may not perform equally well across different body compositions, and that placement-specific calibration may be warranted for wearable and smart garment design.
+Using correlation analysis, robust regression, and bootstrap resampling, I investigated whether body composition affects wearable sensor signal reliability, and whether that relationship depends on sensor placement. Signal variance differed significantly by location overall, and BMI's relationship with signal variance was strongest and most defensible at the wrist (r=-0.663, bootstrap 95% CI entirely below zero), weaker at the chest, and essentially absent at the ankle. This finding held up under a leave-one-subject-out sensitivity check and was consistent in direction with a robust regression estimate. These results suggest that a single sensor placement may not perform equally well across different body compositions, and that the wrist in particular may warrant further attention in wearable and smart garment design.
 
 ## Repository Structure
 
@@ -153,7 +173,7 @@ Using correlation analysis, mixed-effects regression, and robustness testing, I 
 ├── pamap2_analysis_scipy.py     # Python: parses raw .dat files, engineers features
 ├── pamap2_schema.sql            # PostgreSQL schema + analytical views
 ├── load_to_sql.py               # loads engineered features into Postgres
-├── pamap2_final_nocat.R         # R: correlation, ANOVA, mixed-effects, robustness checks
+├── pamap2.Rmd         # R: correlation, ANOVA, OLS with robust SE, bootstrap CI, robust regression, leave-one-out
 ├── pamap2_quality_clean.csv     # engineered features (output of the Python step)
 └── figures/
     ├── figure1_location_variance.png
@@ -167,7 +187,7 @@ Using correlation analysis, mixed-effects regression, and robustness testing, I 
 2. Transcribe the 9 subjects' demographics from `subjectInformation.pdf` into `SUBJECT_INFO` in `pamap2_analysis_scipy.py`
 3. Run `python3 pamap2_analysis_scipy.py` to produce `pamap2_quality_clean.csv`
 4. Create a PostgreSQL database, run `pamap2_schema.sql`, then `python3 load_to_sql.py`
-5. Run `pamap2_final_nocat.R` for the statistical analysis
+5. Open `pamap2.Rmd` for statistical analysis
 6. Connect Tableau to the PostgreSQL database to reproduce the dashboard
 
 ## Author
